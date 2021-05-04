@@ -1,0 +1,14 @@
+
+syntax = "proto3";
+
+package tfx.examples.custom_components.postgres_example_gen;
+
+message PostgresFeatureQuery {
+    string table = 1;
+    repeated postgres_column columns = 2;
+    bool optionFilterNull = 3;
+}
+
+message postgres_column {
+    string name = 1;
+}

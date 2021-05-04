@@ -1,0 +1,6 @@
+cachetools==4.2.2
+ml-metadata==0.29.0
+pandas==1.2.4
+psycopg2-binary==2.8.6
+sqlalchemy==1.4.12
+streamlit==0.81.0

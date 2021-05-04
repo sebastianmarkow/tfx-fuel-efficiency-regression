@@ -1,0 +1,204 @@
+---
+version: '3.9'
+
+services:
+  postgres:
+    restart: always
+    image: docker.io/postgres:13.2
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: features
+    volumes:
+      - 'postgres_data:/var/lib/postgresql/data'
+    networks:
+      - backend
+    ports:
+      - '5432:5432'
+    expose:
+      - '5432'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  dataloader:
+    restart: on-failure:15
+    build:
+      context: ./dataloader
+      args:
+        PYTHON_VERSION: 3.7.10
+        TINI_VERSION: 0.19.0
+    command: ["./load_data.sh"]
+    environment:
+      - 'POSTGRES_HOST=postgres'
+      - 'POSTGRES_PORT=5432'
+      - 'POSTGRES_USER=postgres'
+      - 'POSTGRES_PASSWORD=postgres'
+      - 'POSTGRES_DATABASE=features'
+      - 'CSVFILE_TO_LOAD=/data/auto_mpg.csv'
+      - 'PYTHONUNBUFFERED=1'
+    depends_on:
+      - postgres
+    links:
+      - postgres
+    volumes:
+      - './data/csv:/data:ro'
+    networks:
+      - backend
+
+  mlmddb:
+    restart: always
+    image: docker.io/mysql:8.0.24
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: mysql
+      MYSQL_PASSWORD: mysql
+      MYSQL_DATABASE: mlmd
+    volumes:
+      - 'mlmddb_data:/var/lib/mysql'
+    networks:
+      - backend
+    ports:
+      - '3306:3306'
+    expose:
+      - '3306'
+    healthcheck:
+      test: ['CMD-SHELL', 'mysqladmin -h "localhost" -u $$MYSQL_USER -p$$MYSQL_PASSWORD ping --silent']
+      interval: 20s
+      timeout: 5s
+      retries: 5
+
+  mlmdgrpc:
+    restart: on-failure:10
+    image: gcr.io/tfx-oss-public/ml_metadata_store_server:0.29.0
+    entrypoint: /bin/metadata_store_server
+    command:
+      - '--grpc_port=13000'
+      - '--mysql_config_host=mlmddb'
+      - '--mysql_config_port=3306'
+      - '--mysql_config_user=root'
+      - '--mysql_config_password=root'
+      - '--mysql_config_database=mlmd'
+      - '--enable_database_upgrade=true'
+    depends_on:
+      - mlmddb
+    links:
+      - mlmddb
+    networks:
+      - backend
+    expose:
+      - '13000'
+
+  app:
+    restart: always
+    build:
+      context: ./app
+      args:
+        TFX_VERSION: 0.29.0
+        TINI_VERSION: 0.19.0
+    environment:
+      - 'MLMD_MYSQL_HOST=mlmddb'
+      - 'MLMD_MYSQL_PORT=3306'
+      - 'MLMD_MYSQL_USER=root'
+      - 'MLMD_MYSQL_PASSWORD=root'
+      - 'MLMD_MYSQL_DATABASE=mlmd'
+      - 'POSTGRES_HOST=postgres'
+      - 'POSTGRES_PORT=5432'
+      - 'POSTGRES_USER=postgres'
+      - 'POSTGRES_PASSWORD=postgres'
+      - 'POSTGRES_DATABASE=features'
+      - 'TF_CPP_MIN_LOG_LEVEL=3'
+      - 'PYTHONDONTWRITEBYTECODE=1'
+      - 'PYTHONUNBUFFERED=1'
+    depends_on:
+      - mlmddb
+      - mlmdgrpc
+      - postgres
+      - dataloader
+    links:
+      - mlmddb
+      - mlmdgrpc
+      - postgres
+    volumes:
+      - './app/src:/opt/app'
+      - './data:/var/tfx/data:ro'
+      - '/var/tfx/run'
+    networks:
+      - backend
+
+  jupyter:
+    restart: on-failure
+    build:
+      context: ./app
+      args:
+        TFX_VERSION: 0.29.0
+        TINI_VERSION: 0.19.0
+    entrypoint: ["/entrypoint.sh"]
+    command: ["/run_jupyter.sh"]
+    environment:
+      - 'TF_CPP_MIN_LOG_LEVEL=3'
+      - 'PYTHONDONTWRITEBYTECODE=1'
+      - 'PYTHONUNBUFFERED=1'
+    depends_on:
+      - mlmddb
+      - mlmdgrpc
+      - postgres
+      - dataloader
+    links:
+      - mlmddb
+      - mlmdgrpc
+      - postgres
+    volumes:
+      - './notebooks:/home/jupyter'
+      - './app/src:/opt/app:ro'
+      - './data:/var/tfx/data:ro'
+      - '/var/tfx/run'
+    networks:
+      - backend
+    ports:
+      - '8080:8080'
+      - '6006:6006'
+
+  dashboard:
+    restart: always
+    build:
+      context: ./dashboard
+      args:
+        PYTHON_VERSION: 3.7.10
+        TINI_VERSION: 0.19.0
+    environment:
+      - 'STREAMLIT_SERVER_HEADLESS=true'
+      - 'STREAMLIT_SERVER_ADDRESS=0.0.0.0'
+      - 'STREAMLIT_SERVER_PORT=9000'
+      - 'STREAMLIT_SERVER_RUNONSAVE=true'
+      - 'STREAMLIT_CLIENT_CACHING=true'
+      - 'STREAMLIT_RUNNER_MAGICENABLED=true'
+      - 'STREAMLIT_RUNNER_FIXMATPLOTLIB=true'
+      - 'MLMD_MYSQL_HOST=mlmddb'
+      - 'MLMD_MYSQL_PORT=3306'
+      - 'MLMD_MYSQL_USER=root'
+      - 'MLMD_MYSQL_PASSWORD=root'
+      - 'MLMD_MYSQL_DATABASE=mlmd'
+      - 'PYTHONDONTWRITEBYTECODE=1'
+      - 'PYTHONUNBUFFERED=1'
+    depends_on:
+      - mlmddb
+    links:
+      - mlmddb
+    volumes:
+      - './dashboard/src:/opt/app'
+    networks:
+      - backend
+    ports:
+      - '9000:9000'
+
+volumes:
+  mlmddb_data:
+  postgres_data:
+
+networks:
+  backend:

@@ -1,0 +1,26 @@
+
+syntax = "proto3";
+
+package tfx.examples.custom_components.postgres_example_gen;
+
+message PostgresConnectionConfig {
+    oneof opt_host {
+        string host = 1;
+    }
+
+    oneof opt_port {
+        uint32 port = 2;
+    }
+
+    oneof opt_database {
+        string database = 3;
+    }
+
+    oneof opt_username{
+        string username = 4;
+    }
+
+    oneof opt_password {
+        string password = 5;
+    }
+}
